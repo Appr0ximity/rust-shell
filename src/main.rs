@@ -1,9 +1,10 @@
 #[allow(unused_imports)]
 use std::io::{self, Write};
+use which::which;
 
 fn main() {
     loop{
-        let keywords: Vec<&str> = vec!["exit", "echo", "type"];
+        let shell_built_in: Vec<&str> = vec!["echo", "exit", "type"];
         print!("$ ");
         io::stdout().flush().unwrap();
         let mut command = String::new();
@@ -23,10 +24,13 @@ fn main() {
                 println!();
             },
             "type" => {
-                if keywords.contains(&words[1].as_str()){
-                    println!("{} is a shell builtin", words[1]);
-                }else{
-                    println!("{}: not found", words[1])  
+                let cmd = &words[1];
+                if shell_built_in.contains(&cmd.as_str()) {
+                    println!("{} is a shell builtin", cmd);
+                } else if let Ok(path) = which(cmd) {
+                    println!("{} is {}", cmd, path.display());
+                } else {
+                    println!("{}: not found", cmd);
                 }
             }
             _ => println!("{}: not found", command)
