@@ -1,5 +1,6 @@
 #[allow(unused_imports)]
 use std::io::{self, Write};
+use std::process::Command;
 use which::which;
 
 fn main() {
@@ -33,7 +34,25 @@ fn main() {
                     println!("{}: not found", cmd);
                 }
             }
-            _ => println!("{}: not found", command)
+            _ => {
+                let cmd = &words[0];
+                if let Ok(_path) = which(cmd) {
+                    let output = Command::new(cmd)
+                        .args(&words[1..])
+                        .output();
+                    match output {
+                        Ok(output) => {
+                            print!("{}", String::from_utf8_lossy(&output.stdout));
+                            if !output.stderr.is_empty() {
+                                eprint!("{}", String::from_utf8_lossy(&output.stderr));
+                            }
+                        }
+                        Err(e) => eprintln!("Error: {}", e),
+                    }
+                } else {
+                    println!("{}: not found", cmd);
+                }
+            }
         }
     }
 }
