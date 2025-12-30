@@ -1,11 +1,11 @@
 #[allow(unused_imports)]
 use std::io::{self, Write};
-use std::process::Command;
+use std::{env, process::Command};
 use which::which;
 
 fn main() {
+    let shell_built_in: Vec<&str> = vec!["echo", "exit", "type", "pwd", "cd"];
     loop{
-        let shell_built_in: Vec<&str> = vec!["echo", "exit", "type"];
         print!("$ ");
         io::stdout().flush().unwrap();
         let mut command = String::new();
@@ -25,6 +25,10 @@ fn main() {
                 println!();
             },
             "type" => {
+                if words.len() < 2{
+                    println!("Usage: type <command>");
+                    continue;
+                }
                 let cmd = &words[1];
                 if shell_built_in.contains(&cmd.as_str()) {
                     println!("{} is a shell builtin", cmd);
@@ -32,6 +36,32 @@ fn main() {
                     println!("{} is {}", cmd, path.display());
                 } else {
                     println!("{}: not found", cmd);
+                }
+            },
+            "pwd" =>{
+                match env::current_dir() {
+                    Ok(path) => println!("{}", path.display()),
+                    Err(e) => println!("Error while displaying the path: {}",e),
+                }
+            },
+            "cd" => {
+                if words.len() != 2 {
+                    println!("Usage: cd <directory>");
+                    continue;
+                }
+                if words[1] == "~" {
+                    let home = env::var("HOME").expect("HOME not set");
+                    if env::set_current_dir(&home).is_ok() {
+                        continue;
+                    }else {
+                        println!("Error while changing to HOME");
+                        continue;
+                    }
+                }
+                if env::set_current_dir(&words[1]).is_ok() {
+                    continue;
+                } else {
+                    println!("cd: {}: No such file or directory", words[1]);
                 }
             }
             _ => {
