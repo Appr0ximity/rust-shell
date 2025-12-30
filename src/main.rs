@@ -14,13 +14,36 @@ fn main() {
         if command.is_empty(){
             continue;
         }
-        let words: Vec<String> = command.split_whitespace().map(|s| s.to_string()).collect();
+        let words = parse_command(command);
+        if words.is_empty() {continue;}
         match words[0].as_str(){
             "exit" => break,
             "echo" => {
-                for (i, word) in words.iter().enumerate().skip(1){
-                    print!("{}", word);
-                    if i < words.len() - 1 { print!(" ")}
+                for (i,word) in words.iter().enumerate().skip(1){
+                    let mut chars = word.chars().peekable();
+                    while let Some(&c) = chars.peek(){
+                        chars.next();
+                        if c == '\\'{
+                            if chars.peek().is_some(){
+                                let escaped = chars.next().unwrap();
+                                match escaped{
+                                    'n' => print!("\n"),
+                                    't' => print!("\t"),
+                                    '\\' => print!("\\"),
+                                    _ => {
+                                        print!("\\{}",escaped);
+                                    }
+                                }
+                            }else{
+                                print!("{}", c);
+                            }
+                        }else{
+                            print!("{}", c);
+                        }
+                    }
+                    if i < words.len() - 1{
+                        print!(" ");
+                    }
                 }
                 println!();
             },
@@ -85,4 +108,60 @@ fn main() {
             }
         }
     }
+}
+
+fn parse_command(input: &str)->Vec<String>{
+    let mut args = Vec::new();
+    let mut arg = String::new();
+    let mut chars = input.chars().peekable();
+    let mut in_single = false;
+    let mut in_double = false;
+    while let Some(&c) = chars.peek(){
+        chars.next();
+        match c {
+            ' ' | '\t' | '\n' if !in_single && !in_double =>{
+                if !arg.is_empty(){
+                    args.push(arg);
+                    arg = String::new();
+                }
+            },
+            '"' =>{
+                if in_single{
+                    arg.push(c);
+                }else{
+                    in_double = !in_double;
+                }
+            },
+            '\''=>{
+                if in_double{
+                    arg.push(c);
+                }else{
+                    in_single = !in_single;
+                }
+            },
+            '\\' => {
+                if in_single{
+                    arg.push(c);
+                }else if in_double{
+                    if let Some(&next) = chars.peek(){
+                        if next == '"' || next == '\\' || next == '$' || next == '`' {
+                            chars.next();
+                            arg.push(next);
+                        }else{
+                            arg.push(c);
+                        }
+                    }
+                }else{
+                    if let Some(next) = chars.next(){
+                        arg.push(next);
+                    }
+                }
+            }
+            _ => arg.push(c),
+        }
+    }
+    if !arg.is_empty() {
+        args.push(arg);
+    }
+    args
 }
