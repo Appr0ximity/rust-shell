@@ -1,7 +1,13 @@
 #[allow(unused_imports)]
 use std::io::{self, Write};
-use std::{env, process::Command};
+use std::{env, fs::File, process::Command};
 use which::which;
+
+struct ParsedResult{
+    args: Vec<String>,
+    output_file: Vec<String>,
+    redirect: bool
+}
 
 fn main() {
     let shell_built_in: Vec<&str> = vec!["echo", "exit", "type", "pwd", "cd"];
@@ -14,7 +20,9 @@ fn main() {
         if command.is_empty(){
             continue;
         }
-        let words = parse_command(command);
+        let mut output = String::new();
+        let parsed_result = parse_command(command);
+        let words = parsed_result.args;
         if words.is_empty() {continue;}
         match words[0].as_str(){
             "exit" => break,
@@ -27,49 +35,64 @@ fn main() {
                             if chars.peek().is_some(){
                                 let escaped = chars.next().unwrap();
                                 match escaped{
-                                    'n' => print!("\n"),
-                                    't' => print!("\t"),
-                                    '\\' => print!("\\"),
+                                    'n' => output.push_str("\n"),
+                                    't' => output.push_str("\t"),
+                                    '\\' => output.push_str("\\"),
                                     _ => {
-                                        print!("\\{}",escaped);
+                                        output.push('\\');
+                                        output.push(escaped);
                                     }
                                 }
                             }else{
-                                print!("{}", c);
+                                output.push(c);
                             }
                         }else{
-                            print!("{}", c);
+                            output.push(c);
                         }
                     }
                     if i < words.len() - 1{
-                        print!(" ");
+                        output.push(' ');
                     }
                 }
-                println!();
+                if !parsed_result.redirect{
+                    println!("{}", output);
+                }
             },
             "type" => {
                 if words.len() < 2{
-                    println!("Usage: type <command>");
+                    output = format!("Usage: type <command>");
+                    if !parsed_result.redirect{
+                        println!("{}", output);
+                    }
                     continue;
                 }
                 let cmd = &words[1];
                 if shell_built_in.contains(&cmd.as_str()) {
-                    println!("{} is a shell builtin", cmd);
+                    output = format!("{} is a shell builtin", cmd)
                 } else if let Ok(path) = which(cmd) {
-                    println!("{} is {}", cmd, path.display());
+                    output = format!("{} is {}", cmd, path.display())
                 } else {
-                    println!("{}: not found", cmd);
+                    output = format!("{}: not found", cmd)
+                }
+                if !parsed_result.redirect{
+                    println!("{}", output);
                 }
             },
             "pwd" =>{
                 match env::current_dir() {
-                    Ok(path) => println!("{}", path.display()),
-                    Err(e) => println!("Error while displaying the path: {}",e),
+                    Ok(path) => output = format!("{}", path.display()),
+                    Err(e) => output = format!("Error while displaying the path: {}",e),
+                }
+                if !parsed_result.redirect{
+                    println!("{}", output);
                 }
             },
             "cd" => {
                 if words.len() != 2 {
-                    println!("Usage: cd <directory>");
+                    output = format!("Usage: cd <directory>");
+                    if !parsed_result.redirect{
+                        println!("{}", output);
+                    }
                     continue;
                 }
                 if words[1] == "~" {
@@ -77,51 +100,80 @@ fn main() {
                     if env::set_current_dir(&home).is_ok() {
                         continue;
                     }else {
-                        println!("Error while changing to HOME");
+                        output = format!("Error while changing to HOME");
+                        if !parsed_result.redirect{
+                            println!("{}", output);
+                        }
                         continue;
                     }
                 }
                 if env::set_current_dir(&words[1]).is_ok() {
                     continue;
                 } else {
-                    println!("cd: {}: No such file or directory", words[1]);
+                    output = format!("cd: {}: No such file or directory", words[1])
+                }
+                if !parsed_result.redirect{
+                    println!("{}", output);
                 }
             }
             _ => {
                 let cmd = &words[0];
                 if let Ok(_path) = which(cmd) {
-                    let output = Command::new(cmd)
+                    let result = Command::new(cmd)
                         .args(&words[1..])
                         .output();
-                    match output {
-                        Ok(output) => {
-                            print!("{}", String::from_utf8_lossy(&output.stdout));
-                            if !output.stderr.is_empty() {
-                                eprint!("{}", String::from_utf8_lossy(&output.stderr));
+                    match result {
+                        Ok(result_out) => {
+                            output = format!("{}", String::from_utf8_lossy(&result_out.stdout));
+                            if !result_out.stderr.is_empty() {
+                                eprint!("{}", String::from_utf8_lossy(&result_out.stderr));
+                            }
+                            if !parsed_result.redirect{
+                                println!("{}", output);
                             }
                         }
                         Err(e) => eprintln!("Error: {}", e),
                     }
                 } else {
-                    println!("{}: not found", cmd);
+                    output = format!("{}: not found", cmd);
+                }
+            }
+        }
+        if parsed_result.redirect == true{
+            for file_name in parsed_result.output_file{
+                if let Ok(mut file) = File::create(file_name){
+                    let write_to = file.write_all(output.as_bytes());
+                    match write_to{
+                        Ok(_result) => {
+
+                        }
+                        Err(e) => eprint!("Error while writing to file: {}", e)
+                    }
                 }
             }
         }
     }
 }
 
-fn parse_command(input: &str)->Vec<String>{
+fn parse_command(input: &str)->ParsedResult{
     let mut args = Vec::new();
     let mut arg = String::new();
     let mut chars = input.chars().peekable();
     let mut in_single = false;
     let mut in_double = false;
+    let mut output_file:Vec<String>  = Vec::new();
+    let mut is_file_name = false;
+    let mut redirect = false;
     while let Some(&c) = chars.peek(){
         chars.next();
         match c {
             ' ' | '\t' | '\n' if !in_single && !in_double =>{
-                if !arg.is_empty(){
+                if !arg.is_empty() && !is_file_name{
                     args.push(arg);
+                    arg = String::new();
+                }else if !arg.is_empty() && is_file_name {
+                    output_file.push(arg.clone());
+                    is_file_name = false;
                     arg = String::new();
                 }
             },
@@ -156,12 +208,37 @@ fn parse_command(input: &str)->Vec<String>{
                         arg.push(next);
                     }
                 }
+            },
+            '>' if !in_single && !in_double => {
+                if !arg.is_empty(){
+                    args.push(arg);
+                    arg = String::new();
+                }
+                redirect = true;
+                is_file_name = true;
+            },
+            '1' if !in_single && !in_double=>{
+                if chars.peek() == Some(&'>'){
+                    chars.next();
+                    redirect = true;
+                    is_file_name = true;
+                    if !arg.is_empty(){
+                        args.push(arg);
+                        arg = String::new();
+                    }
+                }else{
+                    arg.push(c);
+                }
             }
             _ => arg.push(c),
         }
     }
     if !arg.is_empty() {
-        args.push(arg);
+        if is_file_name{
+            output_file.push(arg);
+        }else{
+            args.push(arg);
+        }
     }
-    args
+    ParsedResult { args, output_file , redirect}
 }
