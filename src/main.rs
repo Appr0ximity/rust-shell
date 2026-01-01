@@ -129,13 +129,19 @@ fn main() {
                                 eprint!("{}", String::from_utf8_lossy(&result_out.stderr));
                             }
                             if !parsed_result.redirect{
-                                println!("{}", output);
+                                print!("{}", output);
+                                if !output.ends_with('\n'){
+                                    println!()
+                                }
                             }
                         }
                         Err(e) => eprintln!("Error: {}", e),
                     }
                 } else {
                     output = format!("{}: not found", cmd);
+                    if !parsed_result.redirect{
+                        println!("{}", output);
+                    }
                 }
             }
         }
