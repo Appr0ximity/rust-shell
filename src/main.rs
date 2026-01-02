@@ -1,7 +1,7 @@
 #[allow(unused_imports)]
 use std::io::{self, Write};
-use std::{env, fs::{self, File, OpenOptions}, process::Command};
-use rustyline::{Editor, Helper, completion::{Completer, Pair}, highlight::Highlighter, hint::Hinter};
+use std::{ env, fs::{self, File, OpenOptions}, process::Command};
+use rustyline::{CompletionType, Config, Editor, Helper, completion::{Completer, Pair}, highlight::Highlighter, hint::Hinter};
 use which::which;
 
 struct MyHelper{
@@ -20,11 +20,10 @@ impl Completer for MyHelper {
         let mut completions = Vec::new();
         for cmd in &self.commands {
             if cmd.starts_with(line) {
-                let mut completion = cmd.clone();
-                completion.push(' ');
+                let completion = cmd.clone();
                 completions.push(Pair {
                     display: completion.clone(),
-                    replacement: completion.clone(),
+                    replacement: format!("{} ", completion.clone()),
                 });
             }
         }
@@ -49,14 +48,20 @@ struct ParsedResult{
 }
 
 fn main() {
+    let config = Config::builder()
+        .completion_type(CompletionType::List)
+        .build();
     let built_ins: Vec<String> = vec!["echo", "exit", "type", "pwd", "cd"]
         .into_iter()
         .map(|s| s.to_string())
         .collect();
-    let mut all_commands: Vec<String> = vec![];
+    let mut all_commands: Vec<String> = vec!["echo", "exit", "type", "pwd", "cd"]
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect();
     all_commands.extend(get_all_commands());
     let helper = MyHelper { commands:all_commands.clone() };
-    let mut rl = Editor::new();
+    let mut rl = Editor::with_config(config);
     rl.set_helper(Some(helper));
     loop{
         io::stdout().flush().unwrap();
