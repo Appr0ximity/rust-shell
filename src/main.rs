@@ -6,7 +6,9 @@ use which::which;
 struct ParsedResult{
     args: Vec<String>,
     output_file: Vec<String>,
-    redirect: bool
+    error_file: Vec<String>,
+    redirect_as_output: bool,
+    redirect_as_error: bool
 }
 
 fn main() {
@@ -21,6 +23,7 @@ fn main() {
             continue;
         }
         let mut output = String::new();
+        let mut error_output = String::new();
         let parsed_result = parse_command(command);
         let words = parsed_result.args;
         if words.is_empty() {continue;}
@@ -54,16 +57,13 @@ fn main() {
                         output.push(' ');
                     }
                 }
-                if !parsed_result.redirect{
+                if !parsed_result.redirect_as_output{
                     println!("{}", output);
                 }
             },
             "type" => {
                 if words.len() < 2{
-                    output = format!("Usage: type <command>");
-                    if !parsed_result.redirect{
-                        println!("{}", output);
-                    }
+                    eprintln!("Usage: type <command>");
                     continue;
                 }
                 let cmd = &words[1];
@@ -74,25 +74,25 @@ fn main() {
                 } else {
                     output = format!("{}: not found", cmd)
                 }
-                if !parsed_result.redirect{
+                if !parsed_result.redirect_as_output{
                     println!("{}", output);
                 }
             },
             "pwd" =>{
                 match env::current_dir() {
                     Ok(path) => output = format!("{}", path.display()),
-                    Err(e) => output = format!("Error while displaying the path: {}",e),
+                    Err(e) => {
+                        eprintln!("Error while displaying the path: {}",e);
+                        continue;
+                    },
                 }
-                if !parsed_result.redirect{
+                if !parsed_result.redirect_as_output{
                     println!("{}", output);
                 }
             },
             "cd" => {
                 if words.len() != 2 {
-                    output = format!("Usage: cd <directory>");
-                    if !parsed_result.redirect{
-                        println!("{}", output);
-                    }
+                    eprintln!("Usage: cd <directory>");
                     continue;
                 }
                 if words[1] == "~" {
@@ -100,20 +100,12 @@ fn main() {
                     if env::set_current_dir(&home).is_ok() {
                         continue;
                     }else {
-                        output = format!("Error while changing to HOME");
-                        if !parsed_result.redirect{
-                            println!("{}", output);
-                        }
+                        eprintln!("Error while changing to HOME");
                         continue;
                     }
                 }
-                if env::set_current_dir(&words[1]).is_ok() {
-                    continue;
-                } else {
-                    output = format!("cd: {}: No such file or directory", words[1])
-                }
-                if !parsed_result.redirect{
-                    println!("{}", output);
+                if env::set_current_dir(&words[1]).is_err() {
+                    eprintln!("cd: {}: No such file or directory", words[1]);
                 }
             }
             _ => {
@@ -126,29 +118,45 @@ fn main() {
                         Ok(result_out) => {
                             output = format!("{}", String::from_utf8_lossy(&result_out.stdout));
                             if !result_out.stderr.is_empty() {
-                                eprint!("{}", String::from_utf8_lossy(&result_out.stderr));
+                                error_output = format!("{}", String::from_utf8_lossy(&result_out.stderr));
                             }
-                            if !parsed_result.redirect{
+                            if !parsed_result.redirect_as_output && !output.is_empty(){
                                 print!("{}", output);
                                 if !output.ends_with('\n'){
                                     println!()
                                 }
+                            }
+                            if !parsed_result.redirect_as_error{
+                                eprint!("{}", error_output);
                             }
                         }
                         Err(e) => eprintln!("Error: {}", e),
                     }
                 } else {
                     output = format!("{}: not found", cmd);
-                    if !parsed_result.redirect{
+                    if !parsed_result.redirect_as_output{
                         println!("{}", output);
                     }
                 }
             }
         }
-        if parsed_result.redirect == true{
+        if parsed_result.redirect_as_output == true{
             for file_name in parsed_result.output_file{
                 if let Ok(mut file) = File::create(file_name){
                     let write_to = file.write_all(output.as_bytes());
+                    match write_to{
+                        Ok(_result) => {
+
+                        }
+                        Err(e) => eprint!("Error while writing to file: {}", e)
+                    }
+                }
+            }
+        }
+        if parsed_result.redirect_as_error == true{
+            for file_name in parsed_result.error_file{
+                if let Ok(mut file) = File::create(file_name){
+                    let write_to = file.write_all(error_output.as_bytes());
                     match write_to{
                         Ok(_result) => {
 
@@ -168,18 +176,25 @@ fn parse_command(input: &str)->ParsedResult{
     let mut in_single = false;
     let mut in_double = false;
     let mut output_file:Vec<String>  = Vec::new();
-    let mut is_file_name = false;
-    let mut redirect = false;
+    let mut error_file:Vec<String>  = Vec::new();
+    let mut is_output_file_name = false;
+    let mut is_error_file_name = false;
+    let mut redirect_as_output = false;
+    let mut redirect_as_error = false;
     while let Some(&c) = chars.peek(){
         chars.next();
         match c {
             ' ' | '\t' | '\n' if !in_single && !in_double =>{
-                if !arg.is_empty() && !is_file_name{
+                if !arg.is_empty() && !is_output_file_name && !is_error_file_name{
                     args.push(arg);
                     arg = String::new();
-                }else if !arg.is_empty() && is_file_name {
+                }else if !arg.is_empty() && is_output_file_name {
                     output_file.push(arg.clone());
-                    is_file_name = false;
+                    is_output_file_name = false;
+                    arg = String::new();
+                }else if !arg.is_empty() && is_error_file_name{
+                    error_file.push(arg.clone());
+                    is_error_file_name = false;
                     arg = String::new();
                 }
             },
@@ -215,19 +230,32 @@ fn parse_command(input: &str)->ParsedResult{
                     }
                 }
             },
-            '>' if !in_single && !in_double => {
+            '>' if !in_single && !in_double && !is_error_file_name && !is_output_file_name => {
                 if !arg.is_empty(){
                     args.push(arg);
                     arg = String::new();
                 }
-                redirect = true;
-                is_file_name = true;
+                redirect_as_output = true;
+                is_output_file_name = true;
             },
             '1' if !in_single && !in_double=>{
                 if chars.peek() == Some(&'>'){
                     chars.next();
-                    redirect = true;
-                    is_file_name = true;
+                    redirect_as_output = true;
+                    is_output_file_name = true;
+                    if !arg.is_empty(){
+                        args.push(arg);
+                        arg = String::new();
+                    }
+                }else{
+                    arg.push(c);
+                }
+            },
+            '2' if !in_single && !in_double=>{
+                if chars.peek() == Some(&'>'){
+                    chars.next();
+                    redirect_as_error = true;
+                    is_error_file_name = true;
                     if !arg.is_empty(){
                         args.push(arg);
                         arg = String::new();
@@ -240,11 +268,13 @@ fn parse_command(input: &str)->ParsedResult{
         }
     }
     if !arg.is_empty() {
-        if is_file_name{
+        if is_output_file_name{
             output_file.push(arg);
+        }else if is_error_file_name{
+            error_file.push(arg);
         }else{
             args.push(arg);
         }
     }
-    ParsedResult { args, output_file , redirect}
+    ParsedResult { args, output_file, error_file, redirect_as_output, redirect_as_error }
 }
