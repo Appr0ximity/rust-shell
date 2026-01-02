@@ -5,3 +5,5 @@ edition = "2021"
 
 [dependencies]
 which="8.0.0"
+rustyline = "5.0.2"
+rustyline-derive = "0.11.1"

@@ -1,7 +1,42 @@
 #[allow(unused_imports)]
 use std::io::{self, Write};
 use std::{env, fs::{File, OpenOptions}, process::Command};
+use rustyline::{Editor, Helper, completion::{Completer, Pair}, highlight::Highlighter, hint::Hinter};
 use which::which;
+
+struct MyHelper{
+    commands: Vec<String>
+}
+
+impl Completer for MyHelper {
+    type Candidate = Pair;
+    
+    fn complete(
+        &self,
+        line: &str,
+        _pos: usize,
+        _ctx: &rustyline::Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<Self::Candidate>)> {
+        let mut completions = Vec::new();
+        for cmd in &self.commands {
+            if cmd.starts_with(line) {
+                let mut completion = cmd.clone();
+                completion.push(' ');
+                completions.push(Pair {
+                    display: completion.clone(),
+                    replacement: completion.clone(),
+                });
+            }
+        }
+        Ok((0, completions))
+    }
+}
+
+impl Hinter for MyHelper {}
+
+impl Highlighter for MyHelper {}
+
+impl Helper for MyHelper {}
 
 struct ParsedResult{
     args: Vec<String>,
@@ -14,182 +49,192 @@ struct ParsedResult{
 }
 
 fn main() {
-    let shell_built_in: Vec<&str> = vec!["echo", "exit", "type", "pwd", "cd"];
+    let shell_built_in: Vec<String> = vec!["echo", "exit", "type", "pwd", "cd"]
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect();
+    
+    let helper = MyHelper { commands:shell_built_in.clone() };
+    let mut rl = Editor::new();
+    rl.set_helper(Some(helper));
     loop{
-        print!("$ ");
         io::stdout().flush().unwrap();
-        let mut command = String::new();
-        io::stdin().read_line(&mut command).unwrap();
-        let command = command.trim();
-        if command.is_empty(){
-            continue;
-        }
-        let mut output = String::new();
-        let mut error_output = String::new();
-        let parsed_result = parse_command(command);
-        let words = parsed_result.args;
-        if words.is_empty() {continue;}
-        match words[0].as_str(){
-            "exit" => break,
-            "echo" => {
-                for (i,word) in words.iter().enumerate().skip(1){
-                    let mut chars = word.chars().peekable();
-                    while let Some(&c) = chars.peek(){
-                        chars.next();
-                        if c == '\\'{
-                            if chars.peek().is_some(){
-                                let escaped = chars.next().unwrap();
-                                match escaped{
-                                    'n' => output.push_str("\n"),
-                                    't' => output.push_str("\t"),
-                                    '\\' => output.push_str("\\"),
-                                    _ => {
-                                        output.push('\\');
-                                        output.push(escaped);
+        let command = rl.readline("$ ");
+        match command {
+            Ok(command) => {
+                let _ = rl.add_history_entry(command.as_str());
+                let mut output = String::new();
+                let mut error_output = String::new();
+                let parsed_result = parse_command(&command);
+                let words = parsed_result.args;
+                if words.is_empty() {continue;}
+                match words[0].as_str(){
+                    "exit" => break,
+                    "echo" => {
+                        for (i,word) in words.iter().enumerate().skip(1){
+                            let mut chars = word.chars().peekable();
+                            while let Some(&c) = chars.peek(){
+                                chars.next();
+                                if c == '\\'{
+                                    if chars.peek().is_some(){
+                                        let escaped = chars.next().unwrap();
+                                        match escaped{
+                                            'n' => output.push_str("\n"),
+                                            't' => output.push_str("\t"),
+                                            '\\' => output.push_str("\\"),
+                                            _ => {
+                                                output.push('\\');
+                                                output.push(escaped);
+                                            }
+                                        }
+                                    }else{
+                                        output.push(c);
+                                    }
+                                }else{
+                                    output.push(c);
+                                }
+                            }
+                            if i < words.len() - 1{
+                                output.push(' ');
+                            }
+                        }
+                        output.push('\n');
+                        if !parsed_result.redirect_as_output && !parsed_result.append_as_output{
+                            print!("{}", output);
+                        }
+                    },
+                    "type" => {
+                        if words.len() < 2{
+                            eprintln!("Usage: type <command>");
+                            continue;
+                        }
+                        let cmd = &words[1];
+                        if shell_built_in.iter().any(|s| s == cmd) {
+                            output = format!("{} is a shell builtin", cmd)
+                        } else if let Ok(path) = which(cmd) {
+                            output = format!("{} is {}", cmd, path.display())
+                        } else {
+                            output = format!("{}: not found", cmd)
+                        }
+                        if !parsed_result.redirect_as_output && !parsed_result.append_as_output{
+                            println!("{}", output);
+                        }
+                    },
+                    "pwd" =>{
+                        match env::current_dir() {
+                            Ok(path) => output = format!("{}", path.display()),
+                            Err(e) => {
+                                eprintln!("Error while displaying the path: {}",e);
+                                continue;
+                            },
+                        }
+                        if !parsed_result.redirect_as_output && !parsed_result.append_as_output{
+                            println!("{}", output);
+                        }
+                    },
+                    "cd" => {
+                        if words.len() != 2 {
+                            eprintln!("Usage: cd <directory>");
+                            continue;
+                        }
+                        if words[1] == "~" {
+                            let home = env::var("HOME").expect("HOME not set");
+                            if env::set_current_dir(&home).is_ok() {
+                                continue;
+                            }else {
+                                eprintln!("Error while changing to HOME");
+                                continue;
+                            }
+                        }
+                        if env::set_current_dir(&words[1]).is_err() {
+                            eprintln!("cd: {}: No such file or directory", words[1]);
+                        }
+                    }
+                    _ => {
+                        let cmd = &words[0];
+                        if let Ok(_path) = which(cmd) {
+                            let result = Command::new(cmd)
+                                .args(&words[1..])
+                                .output();
+                            match result {
+                                Ok(result_out) => {
+                                    output = format!("{}", String::from_utf8_lossy(&result_out.stdout));
+                                    if !result_out.stderr.is_empty() {
+                                        error_output = format!("{}", String::from_utf8_lossy(&result_out.stderr));
+                                    }
+                                    if !parsed_result.redirect_as_output && !parsed_result.append_as_output && !output.is_empty(){
+                                        print!("{}", output);
+                                        if !output.ends_with('\n'){
+                                            println!()
+                                        }
+                                    }
+                                    if !parsed_result.redirect_as_error && !parsed_result.append_as_error{
+                                        eprint!("{}", error_output);
                                     }
                                 }
-                            }else{
-                                output.push(c);
+                                Err(e) => eprintln!("Error: {}", e),
                             }
-                        }else{
-                            output.push(c);
+                        } else {
+                            output = format!("{}: not found", cmd);
+                            if !parsed_result.redirect_as_output && !parsed_result.append_as_output{
+                                println!("{}", output);
+                            }
                         }
                     }
-                    if i < words.len() - 1{
-                        output.push(' ');
+                }
+                if parsed_result.redirect_as_output {
+                    for file_name in &parsed_result.output_file{
+                        match File::create(file_name){
+                            Ok(mut file) => {
+                                if let Err(e) = file.write_all(output.as_bytes()){
+                                    eprintln!("Error while writing to file: {}",e);
+                                }
+                            },
+                            Err(e) => eprintln!("Error while creating the file: {}", e)
+                        }
                     }
                 }
-                output.push('\n');
-                if !parsed_result.redirect_as_output && !parsed_result.append_as_output{
-                    print!("{}", output);
-                }
-            },
-            "type" => {
-                if words.len() < 2{
-                    eprintln!("Usage: type <command>");
-                    continue;
-                }
-                let cmd = &words[1];
-                if shell_built_in.contains(&cmd.as_str()) {
-                    output = format!("{} is a shell builtin", cmd)
-                } else if let Ok(path) = which(cmd) {
-                    output = format!("{} is {}", cmd, path.display())
-                } else {
-                    output = format!("{}: not found", cmd)
-                }
-                if !parsed_result.redirect_as_output && !parsed_result.append_as_output{
-                    println!("{}", output);
-                }
-            },
-            "pwd" =>{
-                match env::current_dir() {
-                    Ok(path) => output = format!("{}", path.display()),
-                    Err(e) => {
-                        eprintln!("Error while displaying the path: {}",e);
-                        continue;
-                    },
-                }
-                if !parsed_result.redirect_as_output && !parsed_result.append_as_output{
-                    println!("{}", output);
-                }
-            },
-            "cd" => {
-                if words.len() != 2 {
-                    eprintln!("Usage: cd <directory>");
-                    continue;
-                }
-                if words[1] == "~" {
-                    let home = env::var("HOME").expect("HOME not set");
-                    if env::set_current_dir(&home).is_ok() {
-                        continue;
-                    }else {
-                        eprintln!("Error while changing to HOME");
-                        continue;
+                if parsed_result.redirect_as_error {
+                    for file_name in &parsed_result.error_file{
+                        match File::create(file_name){
+                            Ok(mut file) => {
+                                if let Err(e) = file.write_all(error_output.as_bytes()){
+                                    eprint!("Error while writing to file: {}", e);
+                                }
+                            },
+                            Err(e) => eprintln!("Error while creating the file: {}", e),
+                        }
                     }
                 }
-                if env::set_current_dir(&words[1]).is_err() {
-                    eprintln!("cd: {}: No such file or directory", words[1]);
-                }
-            }
-            _ => {
-                let cmd = &words[0];
-                if let Ok(_path) = which(cmd) {
-                    let result = Command::new(cmd)
-                        .args(&words[1..])
-                        .output();
-                    match result {
-                        Ok(result_out) => {
-                            output = format!("{}", String::from_utf8_lossy(&result_out.stdout));
-                            if !result_out.stderr.is_empty() {
-                                error_output = format!("{}", String::from_utf8_lossy(&result_out.stderr));
-                            }
-                            if !parsed_result.redirect_as_output && !parsed_result.append_as_output && !output.is_empty(){
-                                print!("{}", output);
-                                if !output.ends_with('\n'){
-                                    println!()
+                if parsed_result.append_as_output {
+                    for file_name in &parsed_result.output_file{
+                        match OpenOptions::new().create(true).append(true).open(file_name){
+                            Ok(mut file) =>{
+                                if let Err(e ) = file.write_all(output.as_bytes()){
+                                    eprintln!("Error while appending to file: {}", e);
                                 }
                             }
-                            if !parsed_result.redirect_as_error && !parsed_result.append_as_error{
-                                eprint!("{}", error_output);
+                            Err (e) => eprintln!("Error while opening the file: {}", e)
+                        }
+                    }
+                }
+                if parsed_result.append_as_error {
+                    for file_name in &parsed_result.error_file{
+                        match OpenOptions::new().create(true).append(true).open(file_name){
+                            Ok(mut file) =>{
+                                if let Err(e ) = file.write_all(error_output.as_bytes()){
+                                    eprintln!("Error while appending to file: {}", e);
+                                }
                             }
-                        }
-                        Err(e) => eprintln!("Error: {}", e),
-                    }
-                } else {
-                    output = format!("{}: not found", cmd);
-                    if !parsed_result.redirect_as_output && !parsed_result.append_as_output{
-                        println!("{}", output);
-                    }
-                }
-            }
-        }
-        if parsed_result.redirect_as_output {
-            for file_name in &parsed_result.output_file{
-                match File::create(file_name){
-                    Ok(mut file) => {
-                        if let Err(e) = file.write_all(output.as_bytes()){
-                            eprintln!("Error while writing to file: {}",e);
-                        }
-                    },
-                    Err(e) => eprintln!("Error while creating the file: {}", e)
-                }
-            }
-        }
-        if parsed_result.redirect_as_error {
-            for file_name in &parsed_result.error_file{
-                match File::create(file_name){
-                    Ok(mut file) => {
-                        if let Err(e) = file.write_all(error_output.as_bytes()){
-                            eprint!("Error while writing to file: {}", e);
-                        }
-                    },
-                    Err(e) => eprintln!("Error while creating the file: {}", e),
-                }
-            }
-        }
-        if parsed_result.append_as_output {
-            for file_name in &parsed_result.output_file{
-                match OpenOptions::new().create(true).append(true).open(file_name){
-                    Ok(mut file) =>{
-                        if let Err(e ) = file.write_all(output.as_bytes()){
-                            eprintln!("Error while appending to file: {}", e);
+                            Err (e) => eprintln!("Error while opening the file: {}", e)
                         }
                     }
-                    Err (e) => eprintln!("Error while opening the file: {}", e)
-                }
+                }       
             }
-        }
-        if parsed_result.append_as_error {
-            for file_name in &parsed_result.error_file{
-                match OpenOptions::new().create(true).append(true).open(file_name){
-                    Ok(mut file) =>{
-                        if let Err(e ) = file.write_all(error_output.as_bytes()){
-                            eprintln!("Error while appending to file: {}", e);
-                        }
-                    }
-                    Err (e) => eprintln!("Error while opening the file: {}", e)
-                }
-            }
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                break;
+            },
         }
     }
 }
