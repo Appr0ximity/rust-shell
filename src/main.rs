@@ -145,27 +145,25 @@ fn main() {
         }
         if parsed_result.redirect_as_output {
             for file_name in &parsed_result.output_file{
-                if let Ok(mut file) = File::create(file_name){
-                    let write_to = file.write_all(output.as_bytes());
-                    match write_to{
-                        Ok(_result) => {
-
+                match File::create(file_name){
+                    Ok(mut file) => {
+                        if let Err(e) = file.write_all(output.as_bytes()){
+                            eprintln!("Error while writing to file: {}",e);
                         }
-                        Err(e) => eprint!("Error while writing to file: {}", e)
-                    }
+                    },
+                    Err(e) => eprintln!("Error while creating the file: {}", e)
                 }
             }
         }
         if parsed_result.redirect_as_error {
             for file_name in &parsed_result.error_file{
-                if let Ok(mut file) = File::create(file_name){
-                    let write_to = file.write_all(error_output.as_bytes());
-                    match write_to{
-                        Ok(_result) => {
-
+                match File::create(file_name){
+                    Ok(mut file) => {
+                        if let Err(e) = file.write_all(error_output.as_bytes()){
+                            eprint!("Error while writing to file: {}", e);
                         }
-                        Err(e) => eprint!("Error while writing to file: {}", e)
-                    }
+                    },
+                    Err(e) => eprintln!("Error while creating the file: {}", e),
                 }
             }
         }
