@@ -1,6 +1,6 @@
 #[allow(unused_imports)]
 use std::io::{self, Write};
-use std::{env, fs::{File, OpenOptions}, process::Command};
+use std::{env, fs::{self, File, OpenOptions}, process::Command};
 use rustyline::{Editor, Helper, completion::{Completer, Pair}, highlight::Highlighter, hint::Hinter};
 use which::which;
 
@@ -49,12 +49,13 @@ struct ParsedResult{
 }
 
 fn main() {
-    let shell_built_in: Vec<String> = vec!["echo", "exit", "type", "pwd", "cd"]
+    let built_ins: Vec<String> = vec!["echo", "exit", "type", "pwd", "cd"]
         .into_iter()
         .map(|s| s.to_string())
         .collect();
-    
-    let helper = MyHelper { commands:shell_built_in.clone() };
+    let mut all_commands: Vec<String> = vec![];
+    all_commands.extend(get_all_commands());
+    let helper = MyHelper { commands:all_commands.clone() };
     let mut rl = Editor::new();
     rl.set_helper(Some(helper));
     loop{
@@ -109,7 +110,7 @@ fn main() {
                             continue;
                         }
                         let cmd = &words[1];
-                        if shell_built_in.iter().any(|s| s == cmd) {
+                        if built_ins.iter().any(|s| s == cmd) {
                             output = format!("{} is a shell builtin", cmd)
                         } else if let Ok(path) = which(cmd) {
                             output = format!("{} is {}", cmd, path.display())
@@ -364,4 +365,43 @@ fn parse_command(input: &str)->ParsedResult{
         }
     }
     ParsedResult { args, output_file, error_file, redirect_as_output, redirect_as_error, append_as_error, append_as_output }
+}
+
+fn get_all_commands()-> Vec<String>{
+    let mut all_commands = Vec::new();
+    if let Ok(path_vars) = env::var("PATH"){
+        let separator = if cfg!(windows){";"}else{":"};
+
+        for dir in path_vars.split(separator){
+            if let Ok(entries) = fs::read_dir(dir){
+                for entry in entries.filter_map(Result::ok){
+                    let path = entry.path();
+
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        if let Ok(metadata) = fs::metadata(&path){
+                            let permissions = metadata.permissions();
+                            if path.is_file() && permissions.mode() & 0o111 != 0{
+                                if let Some(name) = path.file_name(){
+                                    all_commands.push(name.to_string_lossy().to_string());
+                                }
+                            }
+                        }
+                    }
+                    #[cfg(windows)]
+                    {
+                        if path.is_file(){
+                            if let Some(name) = path.file_name(){
+                                all_commands.push(name.to_string_lossy().to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    all_commands.sort();
+    all_commands.dedup();
+    all_commands
 }
