@@ -1,6 +1,6 @@
 #[allow(unused_imports)]
 use std::io::{self, Write};
-use std::{env, fs::File, process::Command};
+use std::{env, fs::{File, OpenOptions}, process::Command};
 use which::which;
 
 struct ParsedResult{
@@ -8,7 +8,9 @@ struct ParsedResult{
     output_file: Vec<String>,
     error_file: Vec<String>,
     redirect_as_output: bool,
-    redirect_as_error: bool
+    redirect_as_error: bool,
+    append_as_output: bool,
+    append_as_error: bool
 }
 
 fn main() {
@@ -57,8 +59,9 @@ fn main() {
                         output.push(' ');
                     }
                 }
-                if !parsed_result.redirect_as_output{
-                    println!("{}", output);
+                output.push('\n');
+                if !parsed_result.redirect_as_output && !parsed_result.append_as_output{
+                    print!("{}", output);
                 }
             },
             "type" => {
@@ -74,7 +77,7 @@ fn main() {
                 } else {
                     output = format!("{}: not found", cmd)
                 }
-                if !parsed_result.redirect_as_output{
+                if !parsed_result.redirect_as_output && !parsed_result.append_as_output{
                     println!("{}", output);
                 }
             },
@@ -86,7 +89,7 @@ fn main() {
                         continue;
                     },
                 }
-                if !parsed_result.redirect_as_output{
+                if !parsed_result.redirect_as_output && !parsed_result.append_as_output{
                     println!("{}", output);
                 }
             },
@@ -120,13 +123,13 @@ fn main() {
                             if !result_out.stderr.is_empty() {
                                 error_output = format!("{}", String::from_utf8_lossy(&result_out.stderr));
                             }
-                            if !parsed_result.redirect_as_output && !output.is_empty(){
+                            if !parsed_result.redirect_as_output && !parsed_result.append_as_output && !output.is_empty(){
                                 print!("{}", output);
                                 if !output.ends_with('\n'){
                                     println!()
                                 }
                             }
-                            if !parsed_result.redirect_as_error{
+                            if !parsed_result.redirect_as_error && !parsed_result.append_as_error{
                                 eprint!("{}", error_output);
                             }
                         }
@@ -134,14 +137,14 @@ fn main() {
                     }
                 } else {
                     output = format!("{}: not found", cmd);
-                    if !parsed_result.redirect_as_output{
+                    if !parsed_result.redirect_as_output && !parsed_result.append_as_output{
                         println!("{}", output);
                     }
                 }
             }
         }
-        if parsed_result.redirect_as_output == true{
-            for file_name in parsed_result.output_file{
+        if parsed_result.redirect_as_output {
+            for file_name in &parsed_result.output_file{
                 if let Ok(mut file) = File::create(file_name){
                     let write_to = file.write_all(output.as_bytes());
                     match write_to{
@@ -153,8 +156,8 @@ fn main() {
                 }
             }
         }
-        if parsed_result.redirect_as_error == true{
-            for file_name in parsed_result.error_file{
+        if parsed_result.redirect_as_error {
+            for file_name in &parsed_result.error_file{
                 if let Ok(mut file) = File::create(file_name){
                     let write_to = file.write_all(error_output.as_bytes());
                     match write_to{
@@ -163,6 +166,30 @@ fn main() {
                         }
                         Err(e) => eprint!("Error while writing to file: {}", e)
                     }
+                }
+            }
+        }
+        if parsed_result.append_as_output {
+            for file_name in &parsed_result.output_file{
+                match OpenOptions::new().create(true).append(true).open(file_name){
+                    Ok(mut file) =>{
+                        if let Err(e ) = file.write_all(output.as_bytes()){
+                            eprintln!("Error while appending to file: {}", e);
+                        }
+                    }
+                    Err (e) => eprintln!("Error while opening the file: {}", e)
+                }
+            }
+        }
+        if parsed_result.append_as_error {
+            for file_name in &parsed_result.error_file{
+                match OpenOptions::new().create(true).append(true).open(file_name){
+                    Ok(mut file) =>{
+                        if let Err(e ) = file.write_all(error_output.as_bytes()){
+                            eprintln!("Error while appending to file: {}", e);
+                        }
+                    }
+                    Err (e) => eprintln!("Error while opening the file: {}", e)
                 }
             }
         }
@@ -181,6 +208,8 @@ fn parse_command(input: &str)->ParsedResult{
     let mut is_error_file_name = false;
     let mut redirect_as_output = false;
     let mut redirect_as_error = false;
+    let mut append_as_output = false;
+    let mut append_as_error = false;
     while let Some(&c) = chars.peek(){
         chars.next();
         match c {
@@ -237,6 +266,11 @@ fn parse_command(input: &str)->ParsedResult{
                 }
                 redirect_as_output = true;
                 is_output_file_name = true;
+                if chars.peek() == Some(&'>'){
+                    append_as_output = true;
+                    redirect_as_output = false;
+                    chars.next();
+                }
             },
             '1' if !in_single && !in_double=>{
                 if chars.peek() == Some(&'>'){
@@ -246,6 +280,11 @@ fn parse_command(input: &str)->ParsedResult{
                     if !arg.is_empty(){
                         args.push(arg);
                         arg = String::new();
+                    }
+                    if chars.peek() == Some(&'>'){
+                        append_as_output = true;
+                        redirect_as_output = false;
+                        chars.next();
                     }
                 }else{
                     arg.push(c);
@@ -259,6 +298,11 @@ fn parse_command(input: &str)->ParsedResult{
                     if !arg.is_empty(){
                         args.push(arg);
                         arg = String::new();
+                    }
+                    if chars.peek() == Some(&'>'){
+                        append_as_error = true;
+                        redirect_as_error = false;
+                        chars.next();
                     }
                 }else{
                     arg.push(c);
@@ -276,5 +320,5 @@ fn parse_command(input: &str)->ParsedResult{
             args.push(arg);
         }
     }
-    ParsedResult { args, output_file, error_file, redirect_as_output, redirect_as_error }
+    ParsedResult { args, output_file, error_file, redirect_as_output, redirect_as_error, append_as_error, append_as_output }
 }
