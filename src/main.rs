@@ -7,6 +7,11 @@ use which::which;
 struct MyHelper{
     commands: Vec<String>
 }
+enum CommandResult{
+    Output (String, String),
+    Exit,
+    NoOp
+}
 
 impl Completer for MyHelper {
     type Candidate = Pair;
@@ -117,7 +122,74 @@ fn main() {
                         continue;
                     }
                 }
-                run_command(&parsed_result.commands[0], &parsed_result, &built_ins);
+                match run_command(&parsed_result.commands[0], &parsed_result, &built_ins){
+                    CommandResult::Output(output, error_output) =>{
+                        if !parsed_result.redirect_as_output && !parsed_result.append_as_output && !output.is_empty() {
+                            print!("{}", output);
+                        }
+                        if !parsed_result.redirect_as_error && !parsed_result.append_as_error && !error_output.is_empty() {
+                            eprint!("{}", error_output);
+                        }
+                        if parsed_result.redirect_as_output {
+                            for file_name in &parsed_result.output_file{
+                                match File::create(file_name){
+                                    Ok(mut file) => {
+                                        if let Err(e) = file.write_all(output.as_bytes()){
+                                            eprintln!("Error while writing to file: {}",e);
+                                        }
+                                    },
+                                    Err(e) => {
+                                        eprintln!("Error while creating the file: {}", e);
+                                    }
+                                }
+                            }
+                        }
+                        if parsed_result.redirect_as_error {
+                            for file_name in &parsed_result.error_file{
+                                match File::create(file_name){
+                                    Ok(mut file) => {
+                                        if let Err(e) = file.write_all(error_output.as_bytes()){
+                                            eprint!("Error while writing to file: {}", e);
+                                        }
+                                    },
+                                    Err(e) => {
+                                        eprintln!("Error while creating the file: {}", e);
+                                    }
+                                }
+                            }
+                        }
+                        if parsed_result.append_as_output {
+                            for file_name in &parsed_result.output_file{
+                                match OpenOptions::new().create(true).append(true).open(file_name){
+                                    Ok(mut file) =>{
+                                        if let Err(e ) = file.write_all(output.as_bytes()){
+                                            eprintln!("Error while appending to file: {}", e);
+                                        }
+                                    }
+                                    Err (e) => {
+                                        eprintln!("Error while opening the file: {}", e);
+                                    }
+                                }
+                            }
+                        }
+                        if parsed_result.append_as_error {
+                            for file_name in &parsed_result.error_file{
+                                match OpenOptions::new().create(true).append(true).open(file_name){
+                                    Ok(mut file) =>{
+                                        if let Err(e ) = file.write_all(error_output.as_bytes()){
+                                            eprintln!("Error while appending to file: {}", e);
+                                        }
+                                    }
+                                    Err (e) => {
+                                        eprintln!("Error while opening the file: {}", e);
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    CommandResult::NoOp => continue,
+                    CommandResult::Exit => break,
+                }
             }
             Err(e) => {
                 eprintln!("Error: {}", e);
@@ -307,12 +379,12 @@ fn get_all_commands()-> Vec<String>{
     all_commands
 }
 
-fn run_command(command: &Vec<String>, parsed_result: &ParsedResult, built_ins: &Vec<String>){
+fn run_command(command: &Vec<String>, parsed_result: &ParsedResult, built_ins: &Vec<String>)-> CommandResult{
     let mut output = String::new();
     let mut error_output = String::new();
-    if command.is_empty() {return;}
+    if command.is_empty() {return CommandResult::NoOp;}
     match command[0].as_str(){
-        "exit" => return,
+        "exit" => return CommandResult::Exit,
         "echo" => {
             for (i,word) in command.iter().enumerate().skip(1){
                 let mut chars = word.chars().peekable();
@@ -342,14 +414,12 @@ fn run_command(command: &Vec<String>, parsed_result: &ParsedResult, built_ins: &
                 }
             }
             output.push('\n');
-            if !parsed_result.redirect_as_output && !parsed_result.append_as_output{
-                print!("{}", output);
-            }
+            return CommandResult::Output(output,error_output);
         },
         "type" => {
             if command.len() < 2{
                 eprintln!("Usage: type <command>");
-                return;
+                return CommandResult::Output(output,error_output);
             }
             let cmd = &command[1];
             if built_ins.iter().any(|s| s == cmd) {
@@ -359,39 +429,34 @@ fn run_command(command: &Vec<String>, parsed_result: &ParsedResult, built_ins: &
             } else {
                 output = format!("{}: not found", cmd)
             }
-            if !parsed_result.redirect_as_output && !parsed_result.append_as_output{
-                println!("{}", output);
-            }
+            return CommandResult::Output(output,error_output);
         },
         "pwd" =>{
             match env::current_dir() {
                 Ok(path) => output = format!("{}", path.display()),
                 Err(e) => {
                     eprintln!("Error while displaying the path: {}",e);
-                    return;
+                    return CommandResult::Output(output,error_output);
                 },
             }
-            if !parsed_result.redirect_as_output && !parsed_result.append_as_output{
-                println!("{}", output);
-            }
+            return CommandResult::Output(output,error_output);
         },
         "cd" => {
             if command.len() != 2 {
                 eprintln!("Usage: cd <directory>");
-                return;
+                return CommandResult::NoOp;
             }
             if command[1] == "~" {
                 let home = env::var("HOME").expect("HOME not set");
-                if env::set_current_dir(&home).is_ok() {
-                    return;
-                }else {
+                if !env::set_current_dir(&home).is_ok() {
                     eprintln!("Error while changing to HOME");
-                    return;
+                    return CommandResult::NoOp;
                 }
             }
             if env::set_current_dir(&command[1]).is_err() {
                 eprintln!("cd: {}: No such file or directory", command[1]);
             }
+            return CommandResult::NoOp;
         }
         _ => {
             let cmd = &command[0];
@@ -406,70 +471,20 @@ fn run_command(command: &Vec<String>, parsed_result: &ParsedResult, built_ins: &
                             error_output = format!("{}", String::from_utf8_lossy(&result_out.stderr));
                         }
                         if !parsed_result.redirect_as_output && !parsed_result.append_as_output && !output.is_empty(){
-                            print!("{}", output);
                             if !output.ends_with('\n'){
                                 println!()
                             }
                         }
-                        if !parsed_result.redirect_as_error && !parsed_result.append_as_error{
-                            eprint!("{}", error_output);
-                        }
+                        return CommandResult::Output(output,error_output);
                     }
-                    Err(e) => eprintln!("Error: {}", e),
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        return CommandResult::Output(output,error_output);
+                    },
                 }
             } else {
                 output = format!("{}: not found", cmd);
-                if !parsed_result.redirect_as_output && !parsed_result.append_as_output{
-                    println!("{}", output);
-                }
-            }
-        }
-    }
-    if parsed_result.redirect_as_output {
-        for file_name in &parsed_result.output_file{
-            match File::create(file_name){
-                Ok(mut file) => {
-                    if let Err(e) = file.write_all(output.as_bytes()){
-                        eprintln!("Error while writing to file: {}",e);
-                    }
-                },
-                Err(e) => eprintln!("Error while creating the file: {}", e)
-            }
-        }
-    }
-    if parsed_result.redirect_as_error {
-        for file_name in &parsed_result.error_file{
-            match File::create(file_name){
-                Ok(mut file) => {
-                    if let Err(e) = file.write_all(error_output.as_bytes()){
-                        eprint!("Error while writing to file: {}", e);
-                    }
-                },
-                Err(e) => eprintln!("Error while creating the file: {}", e),
-            }
-        }
-    }
-    if parsed_result.append_as_output {
-        for file_name in &parsed_result.output_file{
-            match OpenOptions::new().create(true).append(true).open(file_name){
-                Ok(mut file) =>{
-                    if let Err(e ) = file.write_all(output.as_bytes()){
-                        eprintln!("Error while appending to file: {}", e);
-                    }
-                }
-                Err (e) => eprintln!("Error while opening the file: {}", e)
-            }
-        }
-    }
-    if parsed_result.append_as_error {
-        for file_name in &parsed_result.error_file{
-            match OpenOptions::new().create(true).append(true).open(file_name){
-                Ok(mut file) =>{
-                    if let Err(e ) = file.write_all(error_output.as_bytes()){
-                        eprintln!("Error while appending to file: {}", e);
-                    }
-                }
-                Err (e) => eprintln!("Error while opening the file: {}", e)
+                return CommandResult::Output(output,error_output);
             }
         }
     }
