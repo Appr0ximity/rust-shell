@@ -60,7 +60,7 @@ fn main() {
     let helper = MyHelper { commands:all_commands.clone() };
     let mut rl = Editor::with_config(config);
     rl.set_helper(Some(helper));
-    loop{
+    'shell: loop{
         io::stdout().flush().unwrap();
         let command = rl.readline("$ ");
         match command {
@@ -122,7 +122,7 @@ fn main() {
                 for words in parsed_result.commands{
                     if words.is_empty() {continue;}
                     match words[0].as_str(){
-                        "exit" => break,
+                        "exit" => break 'shell,
                         "echo" => {
                             for (i,word) in words.iter().enumerate().skip(1){
                                 let mut chars = word.chars().peekable();
