@@ -1,3 +1,4 @@
+use std::process::Child;
 use std::result::Result::Ok;
 use std::io::{self, Write};
 use std::{ env, fs::{self, File, OpenOptions}, process::{Command}};
@@ -65,7 +66,7 @@ fn main() {
     let helper = MyHelper { commands:all_commands.clone() };
     let mut rl = Editor::with_config(config);
     rl.set_helper(Some(helper));
-    loop{
+    'shell: loop{
         io::stdout().flush().unwrap();
         let full_command = rl.readline("$ ");
         match full_command {
@@ -73,54 +74,81 @@ fn main() {
                 let _ = rl.add_history_entry(full_command.as_str());
                 let parsed_result = parse_command(&full_command);
                 if parsed_result.commands.len() > 1{
-                    let all_external_commands = parsed_result.commands
-                        .iter()
-                        .all(|cmd| !built_ins.contains(&cmd[0]));
+                    use std::process::Stdio;
+                    let mut last_child: Option<Child> = None;
+                    let mut previous_output: Option<String> = None;
 
-                    if all_external_commands{
-                        use std::process::Stdio;
-                        let mut children: Vec<std::process::Child> = Vec::new();
+                    for (i, cmd_parts) in parsed_result.commands.iter().enumerate(){
+                        let is_builtin = built_ins.contains(&cmd_parts[0]);
 
-                        for (i, cmd_parts) in parsed_result.commands.iter().enumerate(){
+                        if !is_builtin{
                             let mut cmd = Command::new(&cmd_parts[0]);
                             cmd.args(&cmd_parts[1..]);
 
                             if i > 0{
-                                if let Some(prev_child) = children.last_mut(){
+                                if let Some(mut prev_child) = last_child.take(){
                                     let prev_stdout = prev_child.stdout.take().unwrap();
                                     cmd.stdin(prev_stdout);
+                                }else if previous_output.is_some(){
+                                    cmd.stdin(Stdio::piped());
                                 }
                             }
+                            
+                            let needs_builtin_input = i > 0 && previous_output.is_some();
 
                             if i < parsed_result.commands.len() - 1 {
                                 cmd.stdout(Stdio::piped());
                             }
 
                             match cmd.spawn(){
-                                Ok(child) =>{
-                                    children.push(child);
+                                Ok(mut child) =>{
+                                    if needs_builtin_input{
+                                        if let Some (prev_out) = previous_output.take() {
+                                            if let Some (mut stdin) = child.stdin.take(){
+                                                let _ = stdin.write_all(prev_out.as_bytes());
+                                                drop(stdin);
+                                            }
+                                        }
+                                    }
+                                    last_child = Some(child);
                                 },
                                 Err(e) =>{
                                     eprint!("Error while trying to spawn command: {}", e);
                                 }
                             }
-                        }
-
-                        if let Some(last_child) = children.pop(){
-                            match last_child.wait_with_output(){
-                                Ok(cmd_output) => {
-                                    print!("{}", String::from_utf8_lossy(&cmd_output.stdout));
-                                    if !cmd_output.stderr.is_empty() {
-                                        eprint!("{}", String::from_utf8_lossy(&cmd_output.stderr));
-                                    }
+                        }else{
+                            match run_command(cmd_parts, &parsed_result, &built_ins){
+                                CommandResult::Output(output, _error_output)=>{
+                                    previous_output = Some(output);
+                                    last_child = None;
                                 },
-                                Err(e) =>{
-                                    eprintln!("{}", e);
+                                CommandResult::NoOp => {
+                                    previous_output = None;
+                                    last_child = None;
+                                },
+                                CommandResult::Exit => {
+                                    break 'shell;
                                 }
                             }
                         }
-                        continue;
                     }
+
+                    if let Some(last) = last_child{
+                        match last.wait_with_output(){
+                            Ok(cmd_output) => {
+                                print!("{}", String::from_utf8_lossy(&cmd_output.stdout));
+                                if !cmd_output.stderr.is_empty() {
+                                    eprint!("{}", String::from_utf8_lossy(&cmd_output.stderr));
+                                }
+                            },
+                            Err(e) =>{
+                                eprintln!("{}", e);
+                            }
+                        }
+                    } else if let Some(output) = previous_output{
+                        print!("{}", output);
+                    }
+                    continue;
                 }
                 match run_command(&parsed_result.commands[0], &parsed_result, &built_ins){
                     CommandResult::Output(output, error_output) =>{
@@ -423,17 +451,17 @@ fn run_command(command: &Vec<String>, parsed_result: &ParsedResult, built_ins: &
             }
             let cmd = &command[1];
             if built_ins.iter().any(|s| s == cmd) {
-                output = format!("{} is a shell builtin", cmd)
+                output = format!("{} is a shell builtin\n", cmd)
             } else if let Ok(path) = which(cmd) {
-                output = format!("{} is {}", cmd, path.display())
+                output = format!("{} is {}\n", cmd, path.display())
             } else {
-                output = format!("{}: not found", cmd)
+                output = format!("{}: not found\n", cmd)
             }
             return CommandResult::Output(output,error_output);
         },
         "pwd" =>{
             match env::current_dir() {
-                Ok(path) => output = format!("{}", path.display()),
+                Ok(path) => output = format!("{}\n", path.display()),
                 Err(e) => {
                     eprintln!("Error while displaying the path: {}",e);
                     return CommandResult::Output(output,error_output);
@@ -446,14 +474,18 @@ fn run_command(command: &Vec<String>, parsed_result: &ParsedResult, built_ins: &
                 eprintln!("Usage: cd <directory>");
                 return CommandResult::NoOp;
             }
-            if command[1] == "~" {
-                let home = env::var("HOME").expect("HOME not set");
-                if !env::set_current_dir(&home).is_ok() {
-                    eprintln!("Error while changing to HOME");
-                    return CommandResult::NoOp;
+            let target = if command[1] == "~" {
+                match env::var("HOME"){
+                    Ok(home) => home,
+                    Err(e) => {
+                        eprintln!("HOME not set: {}", e);
+                        return CommandResult::NoOp;
+                    }
                 }
-            }
-            if env::set_current_dir(&command[1]).is_err() {
+            }else{
+                command[1].clone()    
+            };
+            if let Err(_) = env::set_current_dir(&target){
                 eprintln!("cd: {}: No such file or directory", command[1]);
             }
             return CommandResult::NoOp;
@@ -483,7 +515,7 @@ fn run_command(command: &Vec<String>, parsed_result: &ParsedResult, built_ins: &
                     },
                 }
             } else {
-                output = format!("{}: not found", cmd);
+                output = format!("{}: not found\n", cmd);
                 return CommandResult::Output(output,error_output);
             }
         }
