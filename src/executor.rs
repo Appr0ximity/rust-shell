@@ -4,7 +4,7 @@ use which::which;
 
 use crate::{CommandResult, ParsedResult};
 
-pub fn run_command(command: &Vec<String>, parsed_result: &ParsedResult, built_ins: &Vec<String>)-> CommandResult{
+pub fn run_command(command: &Vec<String>, parsed_result: &ParsedResult, built_ins: &Vec<String>, history: &Vec<String>)-> CommandResult{
     let mut output = String::new();
     let mut error_output = String::new();
     if command.is_empty() {return CommandResult::NoOp;}
@@ -88,7 +88,9 @@ pub fn run_command(command: &Vec<String>, parsed_result: &ParsedResult, built_in
             return CommandResult::NoOp;
         },
         "history" =>{
-
+            for (i, entry) in history.iter().enumerate(){
+                output.push_str(&format!("{} {}\n", i+1, entry));
+            }
             return CommandResult::Output(output, error_output);
         },
         _ => {

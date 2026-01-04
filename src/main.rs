@@ -77,6 +77,7 @@ fn main() {
         match full_command {
             Ok(full_command) => {
                 let _ = rl.add_history_entry(full_command.as_str());
+                let history_vec = rl.history().iter().map(|s| s.to_string()).collect();
                 let parsed_result = parse_command(&full_command);
                 if parsed_result.commands.len() > 1{
                     use std::process::Stdio;
@@ -122,7 +123,7 @@ fn main() {
                                 }
                             }
                         }else{
-                            match run_command(cmd_parts, &parsed_result, &built_ins){
+                            match run_command(cmd_parts, &parsed_result, &built_ins, &history_vec){
                                 CommandResult::Output(output, _error_output)=>{
                                     previous_output = Some(output);
                                     last_child = None;
@@ -155,7 +156,7 @@ fn main() {
                     }
                     continue;
                 }
-                match run_command(&parsed_result.commands[0], &parsed_result, &built_ins){
+                match run_command(&parsed_result.commands[0], &parsed_result, &built_ins, &history_vec){
                     CommandResult::Output(output, error_output) =>{
                         if !parsed_result.redirect_as_output && !parsed_result.append_as_output && !output.is_empty() {
                             print!("{}", output);
