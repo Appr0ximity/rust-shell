@@ -88,7 +88,23 @@ pub fn run_command(command: &Vec<String>, parsed_result: &ParsedResult, built_in
             return CommandResult::NoOp;
         },
         "history" =>{
-            for (i, entry) in history.iter().enumerate(){
+            if command.len() > 2 {
+                eprintln!("Usage: history <Number of items> (Number of items is optional)");
+                return CommandResult::Output(output,error_output);
+            }
+            let limit = if command.len() == 2{
+                match command[1].parse::<usize>(){
+                    Ok(n) => n.min(history.len()),
+                    Err(e) => {
+                        eprintln!("history: {}: numberic argument required", e);
+                        return CommandResult::Output(output, error_output);
+                    }
+                }
+            }else{
+                history.len()
+            };
+            let start_index = history.len().saturating_sub(limit);
+            for (i, entry) in history.iter().enumerate().skip(start_index){
                 output.push_str(&format!("{} {}\n", i+1, entry));
             }
             return CommandResult::Output(output, error_output);
