@@ -13,10 +13,18 @@ mod executor;
 pub struct MyHelper{
     commands: Vec<String>
 }
+
+pub enum HistoryAction{
+    Read,
+    Write,
+    Append
+}
+
 pub enum CommandResult{
     Output (String, String),
     Exit,
-    NoOp
+    NoOp,
+    ModifyHistory (Option<String>, HistoryAction)
 }
 
 impl Completer for MyHelper {
@@ -59,6 +67,7 @@ struct ParsedResult{
 }
 
 fn main() {
+    let mut last_saved_count = 0;
     let config = Config::builder()
         .completion_type(CompletionType::List)
         .build();
@@ -71,6 +80,9 @@ fn main() {
     let helper = MyHelper { commands:all_commands.clone() };
     let mut rl = Editor::with_config(config);
     rl.set_helper(Some(helper));
+    if let Ok(histfile) = env::var("HISTFILE") {
+        let _ = rl.load_history(&histfile);
+    }
     'shell: loop{
         io::stdout().flush().unwrap();
         let full_command = rl.readline("$ ");
@@ -133,7 +145,55 @@ fn main() {
                                     last_child = None;
                                 },
                                 CommandResult::Exit => {
-                                    break 'shell;
+                                    if let Ok(histfile) = env::var("HISTFILE") {
+                                        let _ = rl.save_history(&histfile);
+                                    }
+                                    break 'shell
+                                },
+                                CommandResult::ModifyHistory(path, action) => {
+                                    let history_path = path.unwrap_or_else(|| ".shell_history".to_string());
+                                    match action {
+                                        HistoryAction::Read => {
+                                            use std::fs::File;
+                                            use std::io::{BufRead, BufReader};
+
+                                            match File::open(&history_path){
+                                                Ok(file) => {
+                                                    for line in BufReader::new(file).lines().flatten(){
+                                                        eprintln!("DEBUG: Loading line: {:?}", &line);
+                                                        let _ = rl.add_history_entry(line);
+                                                    }
+                                                },
+                                                Err (e) =>{
+                                                    eprintln!("Error while opening the file: {}", e);
+                                                }
+                                            }
+                                        },
+                                        HistoryAction::Write =>{
+                                            if let Err(e) = rl.save_history(&history_path){
+                                                eprintln!("Error while loading history: {}", e);
+                                            }
+                                        },
+                                        HistoryAction::Append => {
+                                            use std::fs::OpenOptions;
+
+                                            match OpenOptions::new().create(true).append(true).open(&history_path){
+                                                Ok(mut file) => {
+                                                    for entry in rl.history().iter().skip(last_saved_count){
+                                                        if let Err(e) = writeln!(file, "{}", entry){
+                                                            eprintln!("history: {}", e);
+                                                        }
+                                                    }
+                                                    last_saved_count = rl.history().len();
+                                                },
+                                                Err (e) =>{
+                                                    eprintln!("Error while opening the file: {}", e);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    previous_output = None;
+                                    last_child = None;
                                 }
                             }
                         }
@@ -222,7 +282,54 @@ fn main() {
                         }
                     },
                     CommandResult::NoOp => continue,
-                    CommandResult::Exit => break,
+                    CommandResult::Exit => {
+                        if let Ok(histfile) = env::var("HISTFILE") {
+                            let _ = rl.save_history(&histfile);
+                        }   
+                        break
+                    },
+                    CommandResult::ModifyHistory(path, action) => {
+                        let history_path = path.unwrap_or_else(|| ".shell_history".to_string());
+                        match action {
+                            HistoryAction::Read => {
+                                use std::fs::File;
+                                use std::io::{BufRead, BufReader};
+
+                                match File::open(&history_path){
+                                    Ok(file) => {
+                                        for line in BufReader::new(file).lines().flatten(){
+                                            let _ = rl.add_history_entry(line);
+                                        }
+                                    },
+                                    Err (e) =>{
+                                        eprintln!("Error while opening the file: {}", e);
+                                    }
+                                }
+                            },
+                            HistoryAction::Write => {
+                                if let Err(e) = rl.save_history(&history_path){
+                                    eprintln!("Error while loading history: {}", e);
+                                }
+                            },
+                            HistoryAction::Append =>{
+                                 use std::fs::OpenOptions;
+
+                                match OpenOptions::new().create(true).append(true).open(&history_path){
+                                    Ok(mut file) => {
+                                        for entry in rl.history().iter().skip(last_saved_count){
+                                            if let Err(e) = writeln!(file, "{}", entry){
+                                                eprintln!("history: {}", e);
+                                            }
+                                        }
+                                        last_saved_count = rl.history().len();
+                                    },
+                                    Err (e) =>{
+                                        eprintln!("Error while opening the file: {}", e);
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
             Err(e) => {
@@ -230,6 +337,9 @@ fn main() {
                 break;
             },
         }
+    }
+    if let Ok(histfile) = env::var("HISTFILE") {
+        let _ = rl.save_history(&histfile);
     }
 }
 

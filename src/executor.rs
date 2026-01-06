@@ -1,4 +1,5 @@
 use std::{env, process::Command};
+use crate::HistoryAction;
 
 use which::which;
 
@@ -87,26 +88,44 @@ pub fn run_command(command: &Vec<String>, parsed_result: &ParsedResult, built_in
             }
             return CommandResult::NoOp;
         },
-        "history" =>{
-            if command.len() > 2 {
-                eprintln!("Usage: history <Number of items> (Number of items is optional)");
-                return CommandResult::Output(output,error_output);
-            }
-            let limit = if command.len() == 2{
-                match command[1].parse::<usize>(){
-                    Ok(n) => n.min(history.len()),
-                    Err(e) => {
-                        eprintln!("history: {}: numberic argument required", e);
+        "history" => {
+            if command.len() >= 2 && command[1].starts_with('-') {
+                if command.len() > 3 {
+                    eprintln!("Usage: history -r/-a/-w [file]");
+                    return CommandResult::Output(output, error_output);
+                }
+                let action = match command[1].as_str() {
+                    "-r" => HistoryAction::Read,
+                    "-w" => HistoryAction::Write,
+                    "-a" => HistoryAction::Append,
+                    _ => {
+                        eprintln!("history: {}: invalid option", command[1]);
                         return CommandResult::Output(output, error_output);
                     }
-                }
-            }else{
-                history.len()
-            };
-            let start_index = history.len().saturating_sub(limit);
-            for (i, entry) in history.iter().enumerate().skip(start_index){
-                output.push_str(&format!("{} {}\n", i+1, entry));
+                };
+                let path = command.get(2).map(|s| s.clone());
+                return CommandResult::ModifyHistory(path, action);
             }
+            if command.len() == 1 {
+                for (i, entry) in history.iter().enumerate() {
+                    output.push_str(&format!("{}  {}\n", i + 1, entry));
+                }
+            } else if command.len() == 2 {
+                let limit = match command[1].parse::<usize>() {
+                    Ok(n) => n.min(history.len()),
+                    Err(_) => {
+                        eprintln!("history: {}: numeric argument required", command[1]);
+                        return CommandResult::Output(output, error_output);
+                    }
+                };
+                let start_index = history.len().saturating_sub(limit);
+                for (i, entry) in history.iter().enumerate().skip(start_index) {
+                    output.push_str(&format!("{}  {}\n", i + 1, entry));
+                }
+            } else {
+                eprintln!("Usage: history [n] or history -r/-a/-w [file]");
+            }
+            
             return CommandResult::Output(output, error_output);
         },
         _ => {
