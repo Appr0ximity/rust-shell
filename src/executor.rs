@@ -5,6 +5,16 @@ use which::which;
 
 use crate::{CommandResult, ParsedResult};
 
+/// Executes a single command (built-in or external) and handles output, errors, and history.
+///
+/// # Arguments
+/// * `command` - The command and its arguments
+/// * `parsed_result` - Parsed command line info (for redirection)
+/// * `built_ins` - List of built-in commands
+/// * `history` - Command history
+///
+/// # Returns
+/// * `CommandResult` - The result of command execution
 pub fn run_command(command: &Vec<String>, parsed_result: &ParsedResult, built_ins: &Vec<String>, history: &Vec<String>)-> CommandResult{
     let mut output = String::new();
     let mut error_output = String::new();

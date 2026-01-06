@@ -1,5 +1,13 @@
 use crate::ParsedResult;
 
+/// Parses a shell command line into commands, arguments, and redirections.
+/// Handles pipes, output/error redirection, and quoted strings.
+///
+/// # Arguments
+/// * `input` - The command line string to parse
+///
+/// # Returns
+/// * `ParsedResult` - The parsed structure for execution
 pub fn parse_command(input: &str)->ParsedResult{
     let mut commands = Vec::new();
     let mut args = Vec::new();

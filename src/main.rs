@@ -343,6 +343,7 @@ fn main() {
     }
 }
 
+/// Collects all executable commands from the system PATH.
 fn get_all_commands()-> Vec<String>{
     let mut all_commands = Vec::new();
     if let Ok(path_vars) = env::var("PATH"){
