@@ -1,4 +1,4 @@
-# Simple rust shell
+# Rust shell
 
 A learning project implementing a basic interactive shell with support for pipes, redirections, and some built-ins. It's not meant to replace bash or zsh, but it's a fun way to dive into systems programming in Rust. Just wanted to learn how a shell works.
 
